@@ -1,0 +1,25 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+
+# Large datasets
+data/raw/*.csv
+
+# Trained models
+model/saved/
+
+# Python distribution/build files
+*.egg-info/
+dist/
+build/
