@@ -37,30 +37,32 @@ def evaluate_model(model, X_test, y_test, model_name):
     return {
         "model": model_name,
         "mae": mae,
-        "r2": r2
+        "r2": r2,
+        "predictions": predictions
     }
 
 
 def train_models():
     """
     Load data, prepare features, split the data,
-    train baseline and Random Forest models.
+    train baseline and Random Forest models,
+    and save test predictions.
     """
 
     # --------------------------------
-    # Load data
+    # 1. Load data
     # --------------------------------
 
     games = load_games()
 
     # --------------------------------
-    # Clean data
+    # 2. Clean data
     # --------------------------------
 
     games = clean_data(games)
 
     # --------------------------------
-    # Create ML features
+    # 3. Create ML features
     # --------------------------------
 
     X, y = create_features(games)
@@ -69,21 +71,26 @@ def train_models():
     print(f"Target shape:   {y.shape}")
 
     # --------------------------------
-    # Train-test split
+    # 4. Train-test split
     # --------------------------------
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
+    train_indices, test_indices = train_test_split(
+        X.index,
         test_size=0.20,
         random_state=42
     )
+
+    X_train = X.loc[train_indices]
+    X_test = X.loc[test_indices]
+
+    y_train = y.loc[train_indices]
+    y_test = y.loc[test_indices]
 
     print(f"\nTraining samples: {len(X_train)}")
     print(f"Testing samples:  {len(X_test)}")
 
     # --------------------------------
-    # Baseline model
+    # 5. Dummy baseline
     # --------------------------------
 
     baseline = DummyRegressor(
@@ -103,7 +110,7 @@ def train_models():
     )
 
     # --------------------------------
-    # Random Forest
+    # 6. Random Forest
     # --------------------------------
 
     random_forest = RandomForestRegressor(
@@ -127,7 +134,7 @@ def train_models():
     )
 
     # --------------------------------
-    # Save model
+    # 7. Save trained model
     # --------------------------------
 
     os.makedirs(
@@ -143,6 +150,33 @@ def train_models():
     print(
         "\nModel saved to "
         "model/saved/random_forest.pkl"
+    )
+
+    # --------------------------------
+    # 8. Create demand-gap data
+    # --------------------------------
+
+    prediction_data = pd.DataFrame({
+        "actual_log_owners": y_test,
+        "predicted_log_owners": rf_results["predictions"]
+    })
+
+    prediction_data["demand_gap"] = (
+        prediction_data["actual_log_owners"]
+        - prediction_data["predicted_log_owners"]
+    )
+
+    # --------------------------------
+    # 9. Save test predictions
+    # --------------------------------
+
+    prediction_data.to_csv(
+        "model/saved/test_predictions.csv"
+    )
+
+    print(
+        "Test predictions saved to "
+        "model/saved/test_predictions.csv"
     )
 
     return (
