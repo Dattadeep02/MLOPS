@@ -1,4 +1,5 @@
 import itertools
+import os
 
 import numpy as np
 import pandas as pd
@@ -9,21 +10,34 @@ from data.data_loader import load_games
 from features.parsing import clean_data
 
 
+# ============================================================
+# Configuration
+# ============================================================
+
 PREDICTIONS_PATH = "model/saved/test_predictions.csv"
 OUTPUT_PATH = "model/saved/final_demand_opportunities.csv"
 
 MIN_GAMES = 30
-MIN_POSITIVE_RATE = 0.60
-ALPHA = 0.05
+
+CI_LEVEL = 0.95
+FDR_ALPHA = 0.05
+
+STRONG_POSITIVE_RATE = 0.60
+PROMISING_POSITIVE_RATE = 0.50
 
 
-def load_data():
+# ============================================================
+# Load prediction data
+# ============================================================
+
+def load_prediction_data():
     """
-    Load cleaned game data and model predictions.
-    """
+    Load the model's test predictions.
 
-    games = load_games()
-    games = clean_data(games)
+    The original dataframe index was saved by pandas as
+    'Unnamed: 0'. Recover it as game_index so that predictions
+    can be matched with the cleaned games dataframe.
+    """
 
     predictions = pd.read_csv(
         PREDICTIONS_PATH
@@ -35,22 +49,42 @@ def load_data():
         }
     )
 
-    return games, predictions
+    return predictions
 
+
+# ============================================================
+# Load and clean games
+# ============================================================
+
+def prepare_game_data():
+    """
+    Load and clean the original Steam games data.
+    """
+
+    games = load_games()
+
+    games = clean_data(games)
+
+    return games
+
+
+# ============================================================
+# Create tag pairs
+# ============================================================
 
 def create_tag_pairs(tags):
     """
-    Create unique combinations of two tags.
+    Create all unique pairs of tags for one game.
 
     Example:
 
-    ["Action", "RPG", "Indie"]
+        ["Action", "RPG", "Indie"]
 
     becomes:
 
-    Action + RPG
-    Action + Indie
-    Indie + RPG
+        ("Action", "Indie")
+        ("Action", "RPG")
+        ("Indie", "RPG")
     """
 
     if not isinstance(tags, list):
@@ -60,20 +94,26 @@ def create_tag_pairs(tags):
         set(
             tag.strip()
             for tag in tags
-            if isinstance(tag, str)
-            and tag.strip()
+            if isinstance(tag, str) and tag.strip()
         )
     )
+
+    if len(tags) < 2:
+        return []
 
     return list(
         itertools.combinations(tags, 2)
     )
 
 
-def build_tag_dataset(games, predictions):
+# ============================================================
+# Create game-level tag pairs
+# ============================================================
+
+def create_game_tag_pairs(games, predictions):
     """
-    Match model predictions with games and
-    create game-level tag-pair observations.
+    Match predictions to cleaned games and create one row
+    for every game-tag-pair combination.
     """
 
     results = predictions.merge(
@@ -96,9 +136,10 @@ def build_tag_dataset(games, predictions):
         "tag_pairs"
     )
 
-    results = results.dropna(
-        subset=["tag_pairs"]
-    )
+    results = results[
+        results["tag_pairs"].notna()
+        & (results["tag_pairs"] != "")
+    ]
 
     results["tag_1"] = results[
         "tag_pairs"
@@ -108,21 +149,37 @@ def build_tag_dataset(games, predictions):
         "tag_pairs"
     ].apply(lambda x: x[1])
 
+    print(
+        f"Game-tag-pair rows: "
+        f"{len(results)}"
+    )
+
     return results
 
 
-def calculate_tag_statistics(tag_data):
+# ============================================================
+# Calculate statistics
+# ============================================================
+
+def calculate_tag_statistics(tag_pairs):
     """
-    Calculate statistics for every tag pair.
+    Calculate statistical properties of the demand gap
+    for every tag combination.
     """
 
-    grouped = []
+    print("\nCalculating tag statistics...")
 
-    for (tag_1, tag_2), group in tag_data.groupby(
+    grouped = tag_pairs.groupby(
         ["tag_1", "tag_2"]
-    ):
+    )
 
-        gaps = group["demand_gap"]
+    statistics = []
+
+    for (tag_1, tag_2), group in grouped:
+
+        gaps = group[
+            "demand_gap"
+        ].dropna()
 
         n = len(gaps)
 
@@ -130,282 +187,370 @@ def calculate_tag_statistics(tag_data):
             continue
 
         mean_gap = gaps.mean()
-        median_gap = gaps.median()
-        std_gap = gaps.std()
 
-        positive_rate = (
-            (gaps > 0).mean()
+        median_gap = gaps.median()
+
+        std_gap = gaps.std(
+            ddof=1
         )
 
-        # --------------------------------
+        positive_gap_rate = (
+            gaps > 0
+        ).mean()
+
+        # ----------------------------------------------------
         # One-sample t-test
         #
-        # H0: mean demand gap = 0
-        # H1: mean demand gap > 0
-        # --------------------------------
+        # H0: average demand gap = 0
+        # H1: average demand gap != 0
+        # ----------------------------------------------------
 
-        t_statistic, p_value_two_sided = (
-            stats.ttest_1samp(
-                gaps,
-                0
-            )
-        )
+        if std_gap == 0 or np.isnan(std_gap):
 
-        if t_statistic > 0:
-            p_value = (
-                p_value_two_sided / 2
-            )
-        else:
             p_value = 1.0
 
-        # --------------------------------
-        # 95% confidence interval
-        # --------------------------------
+        else:
+
+            _, p_value = stats.ttest_1samp(
+                gaps,
+                popmean=0
+            )
+
+        # ----------------------------------------------------
+        # Confidence interval
+        # ----------------------------------------------------
 
         standard_error = (
             std_gap / np.sqrt(n)
         )
 
         t_critical = stats.t.ppf(
-            0.975,
+            1 - (1 - CI_LEVEL) / 2,
             df=n - 1
         )
 
-        margin_of_error = (
-            t_critical
-            * standard_error
+        margin_error = (
+            t_critical * standard_error
         )
 
         ci_lower = (
-            mean_gap
-            - margin_of_error
+            mean_gap - margin_error
         )
 
         ci_upper = (
-            mean_gap
-            + margin_of_error
+            mean_gap + margin_error
         )
 
-        grouped.append({
-            "tag_1": tag_1,
-            "tag_2": tag_2,
-            "games": n,
-            "avg_gap": mean_gap,
-            "median_gap": median_gap,
-            "std_gap": std_gap,
-            "positive_gap_rate": positive_rate,
-            "t_statistic": t_statistic,
-            "p_value": p_value,
-            "ci_lower": ci_lower,
-            "ci_upper": ci_upper
-        })
+        statistics.append(
+            {
+                "tag_1": tag_1,
+                "tag_2": tag_2,
+                "games": n,
+                "avg_gap": mean_gap,
+                "median_gap": median_gap,
+                "std_gap": std_gap,
+                "positive_gap_rate": positive_gap_rate,
+                "p_value": p_value,
+                "ci_lower": ci_lower,
+                "ci_upper": ci_upper,
+            }
+        )
 
-    return pd.DataFrame(grouped)
+    results = pd.DataFrame(
+        statistics
+    )
+
+    print(
+        f"Tag combinations tested: "
+        f"{len(results)}"
+    )
+
+    return results
 
 
-def apply_fdr_correction(df):
+# ============================================================
+# FDR correction
+# ============================================================
+
+def apply_fdr_correction(results):
     """
-    Apply Benjamini-Hochberg False Discovery Rate
-    correction to all tag-pair statistical tests.
+    Apply Benjamini-Hochberg False Discovery Rate correction.
     """
 
-    if df.empty:
-        return df
+    print(
+        "\nApplying Benjamini-Hochberg "
+        "FDR correction..."
+    )
 
-    rejected, adjusted_pvalues, _, _ = (
+    rejected, adjusted_p_values, _, _ = (
         multipletests(
-            df["p_value"],
-            alpha=ALPHA,
+            results["p_value"],
+            alpha=FDR_ALPHA,
             method="fdr_bh"
         )
     )
 
-    df["adjusted_p_value"] = (
-        adjusted_pvalues
+    results["adjusted_p_value"] = (
+        adjusted_p_values
     )
 
-    df["fdr_significant"] = (
+    results["fdr_significant"] = (
         rejected
     )
 
-    return df
+    return results
 
 
-def print_diagnostics(df):
+# ============================================================
+# Opportunity score
+# ============================================================
+
+def calculate_opportunity_score(results):
     """
-    Show where tag combinations are being
-    eliminated by our statistical filters.
+    Rank demand opportunities.
+
+    The score considers:
+
+    1. Average positive demand gap
+    2. Percentage of games beating prediction
+    3. Number of games supporting the signal
+
+    This score is for ranking, not statistical significance.
     """
 
-    print(
-        "\n================ DIAGNOSTICS ================"
+    results = results.copy()
+
+    effect_component = (
+        results["avg_gap"]
+        .clip(lower=0)
+    )
+
+    consistency_component = (
+        results["positive_gap_rate"]
+    )
+
+    sample_component = np.sqrt(
+        results["games"]
+        / (
+            results["games"] + 100
+        )
+    )
+
+    results["opportunity_score"] = (
+        effect_component
+        * consistency_component
+        * sample_component
+    )
+
+    return results
+
+
+# ============================================================
+# Opportunity classification
+# ============================================================
+
+def classify_opportunities(results):
+    """
+    Classify tag combinations based on the confidence
+    interval and consistency of positive demand gaps.
+
+    FDR significance remains separately reported.
+    """
+
+    results = results.copy()
+
+    conditions = [
+
+        (
+            (results["ci_lower"] > 0)
+            &
+            (
+                results["positive_gap_rate"]
+                >= STRONG_POSITIVE_RATE
+            )
+        ),
+
+        (
+            (results["ci_lower"] > 0)
+            &
+            (
+                results["positive_gap_rate"]
+                >= PROMISING_POSITIVE_RATE
+            )
+        ),
+
+        (
+            results["ci_lower"] > 0
+        ),
+    ]
+
+    choices = [
+        "Strong Opportunity",
+        "Promising Opportunity",
+        "Statistical Signal",
+    ]
+
+    results["opportunity_level"] = np.select(
+        conditions,
+        choices,
+        default="Not Supported"
+    )
+
+    return results
+
+
+# ============================================================
+# Diagnostics
+# ============================================================
+
+def print_diagnostics(results):
+
+    print("\n")
+    print("=" * 70)
+    print("DEMAND OPPORTUNITY DIAGNOSTICS")
+    print("=" * 70)
+
+    total = len(results)
+
+    fdr_count = int(
+        results["fdr_significant"].sum()
+    )
+
+    ci_positive_count = int(
+        (
+            results["ci_lower"] > 0
+        ).sum()
+    )
+
+    positive_average_count = int(
+        (
+            results["avg_gap"] > 0
+        ).sum()
+    )
+
+    strong_count = int(
+        (
+            results["opportunity_level"]
+            == "Strong Opportunity"
+        ).sum()
+    )
+
+    promising_count = int(
+        (
+            results["opportunity_level"]
+            == "Promising Opportunity"
+        ).sum()
+    )
+
+    signal_count = int(
+        (
+            results["opportunity_level"]
+            == "Statistical Signal"
+        ).sum()
     )
 
     print(
         f"\nTotal combinations tested: "
-        f"{len(df)}"
+        f"{total}"
     )
 
     print(
-        "\nFDR significant:",
-        df["fdr_significant"].sum()
+        f"FDR significant:            "
+        f"{fdr_count}"
     )
 
     print(
-        "CI lower > 0:",
-        (
-            df["ci_lower"] > 0
-        ).sum()
+        f"CI lower > 0:               "
+        f"{ci_positive_count}"
     )
 
     print(
-        "Positive average gap:",
-        (
-            df["avg_gap"] > 0
-        ).sum()
+        f"Positive average gap:       "
+        f"{positive_average_count}"
     )
 
     print(
-        "Positive gap rate >= 60%:",
-        (
-            df["positive_gap_rate"] >= 0.60
-        ).sum()
+        f"\nStrong opportunities:       "
+        f"{strong_count}"
     )
 
     print(
-        "Positive gap rate >= 55%:",
-        (
-            df["positive_gap_rate"] >= 0.55
-        ).sum()
+        f"Promising opportunities:    "
+        f"{promising_count}"
     )
 
     print(
-        "Positive gap rate >= 50%:",
-        (
-            df["positive_gap_rate"] >= 0.50
-        ).sum()
+        f"Statistical signals:        "
+        f"{signal_count}"
     )
 
-    # --------------------------------
-    # Sequential filtering
-    # --------------------------------
 
-    fdr_df = df[
-        df["fdr_significant"]
-    ]
+# ============================================================
+# Display top opportunities
+# ============================================================
 
-    ci_df = fdr_df[
-        fdr_df["ci_lower"] > 0
-    ]
+def print_top_opportunities(
+    results,
+    n=20
+):
 
-    consistency_df = ci_df[
-        ci_df["positive_gap_rate"]
-        >= MIN_POSITIVE_RATE
-    ]
+    opportunities = results[
+        results["opportunity_level"].isin(
+            [
+                "Strong Opportunity",
+                "Promising Opportunity",
+                "Statistical Signal",
+            ]
+        )
+    ].copy()
 
-    print(
-        "\nSequential filtering:"
+    opportunities = opportunities.sort_values(
+        "opportunity_score",
+        ascending=False
     )
 
-    print(
-        f"After FDR correction: "
-        f"{len(fdr_df)}"
-    )
+    print("\n")
+    print("=" * 70)
+    print("TOP DEMAND OPPORTUNITIES")
+    print("=" * 70)
 
-    print(
-        f"After CI > 0: "
-        f"{len(ci_df)}"
-    )
+    if opportunities.empty:
 
-    print(
-        f"After {MIN_POSITIVE_RATE:.0%} "
-        f"consistency requirement: "
-        f"{len(consistency_df)}"
-    )
+        print(
+            "\nNo demand opportunities found."
+        )
 
-    # --------------------------------
-    # Inspect best FDR results
-    # --------------------------------
+        return
 
-    print(
-        "\nTop FDR-significant combinations:"
-    )
-
-    diagnostic_columns = [
+    columns = [
         "tag_1",
         "tag_2",
         "games",
         "avg_gap",
+        "median_gap",
         "positive_gap_rate",
+        "ci_lower",
+        "ci_upper",
         "p_value",
         "adjusted_p_value",
-        "ci_lower",
-        "ci_upper"
+        "opportunity_score",
+        "opportunity_level",
     ]
 
+    display_data = opportunities[
+        columns
+    ].head(n).copy()
+
     print(
-        df
-        .sort_values(
-            "adjusted_p_value"
-        )
-        [diagnostic_columns]
-        .head(20)
-        .to_string(index=False)
-    )
-
-
-def identify_opportunities(df):
-    """
-    Select tag combinations that satisfy
-    all statistical requirements.
-    """
-
-    opportunities = df[
-        (df["fdr_significant"])
-        &
-        (df["ci_lower"] > 0)
-        &
-        (
-            df["positive_gap_rate"]
-            >= MIN_POSITIVE_RATE
-        )
-    ].copy()
-
-    if opportunities.empty:
-        return opportunities
-
-    # --------------------------------
-    # Opportunity score
-    # --------------------------------
-    #
-    # This is a ranking score.
-    # It is NOT a probability.
-    #
-    # Higher means:
-    # - larger demand gap
-    # - more consistent positive gaps
-    # - stronger statistical evidence
-    #
-
-    opportunities["opportunity_score"] = (
-        opportunities["avg_gap"]
-        *
-        opportunities["positive_gap_rate"]
-        *
-        (
-            -np.log10(
-                opportunities["adjusted_p_value"]
-            )
+        display_data.to_string(
+            index=False
         )
     )
 
-    opportunities = opportunities.sort_values(
-        by="opportunity_score",
-        ascending=False
-    )
 
-    return opportunities
-
+# ============================================================
+# Main
+# ============================================================
 
 def main():
 
@@ -413,138 +558,132 @@ def main():
         "Loading games and predictions..."
     )
 
-    games, predictions = load_data()
+    # --------------------------------------------------------
+    # Load predictions
+    # --------------------------------------------------------
+
+    predictions = load_prediction_data()
 
     print(
-        f"Games: {len(games)}"
+        f"Predictions: "
+        f"{len(predictions)}"
     )
+
+    # --------------------------------------------------------
+    # Load cleaned games
+    # --------------------------------------------------------
+
+    games = prepare_game_data()
 
     print(
-        f"Predictions: {len(predictions)}"
+        f"Games: "
+        f"{len(games)}"
     )
 
-    # --------------------------------
+    # --------------------------------------------------------
     # Create game-level tag pairs
-    # --------------------------------
+    # --------------------------------------------------------
 
-    print(
-        "\nCreating game-level tag pairs..."
-    )
-
-    tag_data = build_tag_dataset(
+    tag_pairs = create_game_tag_pairs(
         games,
         predictions
     )
 
-    print(
-        f"Game-tag-pair rows: "
-        f"{len(tag_data)}"
-    )
+    if tag_pairs.empty:
 
-    # --------------------------------
+        print(
+            "\nNo tag pairs were created."
+        )
+
+        return
+
+    # --------------------------------------------------------
     # Calculate statistics
-    # --------------------------------
+    # --------------------------------------------------------
 
-    print(
-        "\nCalculating tag statistics..."
+    results = calculate_tag_statistics(
+        tag_pairs
     )
 
-    statistics_df = calculate_tag_statistics(
-        tag_data
-    )
+    if results.empty:
 
-    print(
-        f"Tag combinations tested: "
-        f"{len(statistics_df)}"
-    )
+        print(
+            "\nNo tag combinations passed "
+            "the minimum game threshold."
+        )
 
-    # --------------------------------
+        return
+
+    # --------------------------------------------------------
     # FDR correction
-    # --------------------------------
+    # --------------------------------------------------------
 
-    print(
-        "\nApplying Benjamini-Hochberg "
-        "FDR correction..."
+    results = apply_fdr_correction(
+        results
     )
 
-    statistics_df = apply_fdr_correction(
-        statistics_df
+    # --------------------------------------------------------
+    # Opportunity score
+    # --------------------------------------------------------
+
+    results = calculate_opportunity_score(
+        results
     )
 
-    # --------------------------------
+    # --------------------------------------------------------
+    # Classification
+    # --------------------------------------------------------
+
+    results = classify_opportunities(
+        results
+    )
+
+    # --------------------------------------------------------
     # Diagnostics
-    # --------------------------------
+    # --------------------------------------------------------
 
     print_diagnostics(
-        statistics_df
+        results
     )
 
-    # --------------------------------
-    # Identify final opportunities
-    # --------------------------------
+    # --------------------------------------------------------
+    # Top opportunities
+    # --------------------------------------------------------
 
-    opportunities = identify_opportunities(
-        statistics_df
+    print_top_opportunities(
+        results,
+        n=20
     )
 
-    # --------------------------------
-    # Display final results
-    # --------------------------------
+    # --------------------------------------------------------
+    # Sort final results
+    # --------------------------------------------------------
 
-    print(
-        "\n=============================================================="
+    results = results.sort_values(
+        "opportunity_score",
+        ascending=False
     )
 
-    print(
-        "STATISTICALLY VALIDATED DEMAND OPPORTUNITIES"
+    # --------------------------------------------------------
+    # Save
+    # --------------------------------------------------------
+
+    os.makedirs(
+        os.path.dirname(
+            OUTPUT_PATH
+        ),
+        exist_ok=True
     )
 
-    print(
-        "=============================================================="
-    )
-
-    columns = [
-        "tag_1",
-        "tag_2",
-        "games",
-        "avg_gap",
-        "positive_gap_rate",
-        "adjusted_p_value",
-        "ci_lower",
-        "ci_upper",
-        "opportunity_score"
-    ]
-
-    if opportunities.empty:
-
-        print(
-            "\nNo combinations passed all "
-            "statistical requirements."
-        )
-
-    else:
-
-        print(
-            opportunities[
-                columns
-            ]
-            .head(20)
-            .to_string(index=False)
-        )
-
-    print(
-        f"\nValidated opportunities: "
-        f"{len(opportunities)}"
-    )
-
-    # --------------------------------
-    # Save final results
-    # --------------------------------
-
-    opportunities.to_csv(
+    results.to_csv(
         OUTPUT_PATH,
         index=False
     )
+
+    print("\n")
+    print("=" * 70)
+    print("FINAL OUTPUT")
+    print("=" * 70)
 
     print(
         f"\nResults saved to: "
