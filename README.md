@@ -222,15 +222,25 @@ Push the feature branch:
 Changes can then be reviewed and merged into the main branch.
 
 
-<<<<<<< HEAD
 REBASE DEMONSTRATION
 --------------------
 
 This section demonstrates Git rebase workflow.
 
 
-=======
->>>>>>> 0ce6403 (docs: document feature branch workflow)
+RESET DEMONSTRATION
+-------------------
+
+This temporary change is used to demonstrate git reset.
+
+
+INTERACTIVE REBASE DEMONSTRATION
+--------------------------------
+
+This section demonstrates interactive rebase in Git.
+Interactive rebase can be used to clean up commit history and modify commit messages.
+
+
 CURRENT DEVELOPMENT
 -------------------
 
