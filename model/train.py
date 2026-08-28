@@ -13,6 +13,17 @@ from features.parsing import clean_data
 from features.engineering import create_features
 
 
+# Training configuration
+TEST_SIZE = 0.20
+RANDOM_STATE = 42
+N_ESTIMATORS = 100
+
+# Output paths
+OUTPUT_DIR = "model/saved"
+MODEL_PATH = f"{OUTPUT_DIR}/random_forest.pkl"
+PREDICTIONS_PATH = f"{OUTPUT_DIR}/test_predictions.csv"
+
+
 def evaluate_model(model, X_test, y_test, model_name):
     """
     Evaluate a regression model using MAE and R².
@@ -76,8 +87,8 @@ def train_models():
 
     train_indices, test_indices = train_test_split(
         X.index,
-        test_size=0.20,
-        random_state=42
+        test_size=TEST_SIZE,
+        random_state=RANDOM_STATE
     )
 
     X_train = X.loc[train_indices]
@@ -114,8 +125,8 @@ def train_models():
     # --------------------------------
 
     random_forest = RandomForestRegressor(
-        n_estimators=100,
-        random_state=42,
+        n_estimators=N_ESTIMATORS,
+        random_state=RANDOM_STATE,
         n_jobs=-1
     )
 
@@ -138,18 +149,17 @@ def train_models():
     # --------------------------------
 
     os.makedirs(
-        "model/saved",
+        OUTPUT_DIR,
         exist_ok=True
     )
 
     joblib.dump(
         random_forest,
-        "model/saved/random_forest.pkl"
+        MODEL_PATH
     )
 
     print(
-        "\nModel saved to "
-        "model/saved/random_forest.pkl"
+        f"\nModel saved to {MODEL_PATH}"
     )
 
     # --------------------------------
@@ -171,12 +181,11 @@ def train_models():
     # --------------------------------
 
     prediction_data.to_csv(
-        "model/saved/test_predictions.csv"
+        PREDICTIONS_PATH
     )
 
     print(
-        "Test predictions saved to "
-        "model/saved/test_predictions.csv"
+        f"Test predictions saved to {PREDICTIONS_PATH}"
     )
 
     return (
@@ -189,4 +198,4 @@ def train_models():
 
 
 if __name__ == "__main__":
-    train_models()new cchanges 
+    train_models()
