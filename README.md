@@ -222,15 +222,12 @@ Push the feature branch:
 Changes can then be reviewed and merged into the main branch.
 
 
-<<<<<<< HEAD
 REBASE DEMONSTRATION
 --------------------
 
 This section demonstrates Git rebase workflow.
 
 
-=======
->>>>>>> 0ce6403 (docs: document feature branch workflow)
 CURRENT DEVELOPMENT
 -------------------
 
