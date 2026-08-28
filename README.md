@@ -194,6 +194,40 @@ cache files, and generated model artifacts from being pushed to the
 repository.
 
 
+GIT WORKFLOW
+------------
+
+The project uses feature branches for isolated development and testing.
+
+Create a new feature branch:
+
+    git checkout -b feature/<feature-name>
+
+Make the required changes and check the status:
+
+    git status
+
+Stage the changes:
+
+    git add .
+
+Commit the changes:
+
+    git commit -m "feat: describe the change"
+
+Push the feature branch:
+
+    git push -u origin feature/<feature-name>
+
+Changes can then be reviewed and merged into the main branch.
+
+
+REBASE DEMONSTRATION
+--------------------
+
+This section demonstrates Git rebase workflow.
+
+
 CURRENT DEVELOPMENT
 -------------------
 
