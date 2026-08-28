@@ -192,3 +192,11 @@ normally be committed to GitHub.
 The .gitignore file is used to prevent unnecessary datasets, Python
 cache files, and generated model artifacts from being pushed to the
 repository.
+
+
+CURRENT DEVELOPMENT
+-------------------
+
+The project is currently being developed through feature branches.
+Recent work includes improvements to model training configuration and
+statistical demand-opportunity analysis.
